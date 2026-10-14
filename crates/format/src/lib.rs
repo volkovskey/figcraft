@@ -39,6 +39,9 @@ pub const FORMAT: &str = "figcraft";
 pub const VERSION: u32 = 1;
 /// Largest archive member we read (guards against zip bombs).
 const MAX_MEMBER: u64 = 512 * 1024 * 1024;
+/// Largest `document.json` read: a document as large as the `.fig` import allows (a 900 000-layer
+/// file saves as 1.5 GB), so whatever opens can be saved and opened again.
+const MAX_DOCUMENT: u64 = 4 * 1024 * 1024 * 1024;
 /// Most versions a file keeps: saving more is refused, extra entries in a file are skipped.
 pub const MAX_VERSIONS: usize = 100;
 /// Longest version name and description kept (chars).
@@ -487,7 +490,7 @@ pub fn load_bytes_with_versions(bytes: &[u8]) -> Result<Loaded, FormatError> {
         return Ok(Loaded { issues, ..Loaded::from(doc) });
     }
     let mut z = zip::ZipArchive::new(std::io::Cursor::new(bytes)).map_err(|e| FormatError::Corrupt(e.to_string()))?;
-    let text = String::from_utf8(read_member(&mut z, "document.json", MAX_MEMBER)?).map_err(|e| FormatError::Corrupt(e.to_string()))?;
+    let text = String::from_utf8(read_member(&mut z, "document.json", MAX_DOCUMENT)?).map_err(|e| FormatError::Corrupt(e.to_string()))?;
     let (mut doc, mut issues, own_images) = parse_json(&text)?;
     let names: Vec<String> = z.file_names().filter(|n| n.starts_with("images/")).map(str::to_string).collect();
     let mut images = BTreeMap::new();

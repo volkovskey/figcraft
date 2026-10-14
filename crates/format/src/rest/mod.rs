@@ -55,7 +55,7 @@ use props::{MAX_COORD, MAX_SIZE, clip_str, flag, list, num, text};
 pub use variables::export as export_variables;
 
 /// Most layers imported from one file.
-pub const MAX_NODES: usize = 200_000;
+pub const MAX_NODES: usize = 2_000_000;
 /// Deepest layer nesting followed.
 const MAX_DEPTH: usize = 256;
 /// Deepest JSON nesting parsed: each layer level is a node object and its `children` array, so
@@ -191,15 +191,23 @@ pub fn import(v: &Value, images: ImageResolver) -> Result<(Document, Vec<String>
 /// in the file JSON (a `meta` with `variableCollections`, or `variableCollections` and
 /// `variables` at the top level) are read too; the first definition of an id wins.
 pub fn import_with(v: &Value, variables: Option<&Value>, images: ImageResolver) -> Result<(Document, Vec<String>), FormatError> {
-    import_impl(v, variables, images, false)
+    import_impl(v, variables, images, false, Vec::new())
 }
 
-/// Internal .fig JSON path: GUID provenance is not part of the public REST import contract.
-pub(crate) fn import_fig(v: &Value, images: ImageResolver) -> Result<(Document, Vec<String>), FormatError> {
-    import_impl(v, None, images, true)
+/// Internal .fig JSON path: GUID provenance is not part of the public REST import contract. Its
+/// vectors name their networks by `vectorNetworkRef`, an index in `networks` (built once each, and
+/// far smaller than as JSON).
+pub(crate) fn import_fig(v: &Value, images: ImageResolver, networks: Vec<Option<VectorNetwork>>) -> Result<(Document, Vec<String>), FormatError> {
+    import_impl(v, None, images, true, networks)
 }
 
-fn import_impl(v: &Value, variables: Option<&Value>, images: ImageResolver, fig_sources: bool) -> Result<(Document, Vec<String>), FormatError> {
+fn import_impl(
+    v: &Value,
+    variables: Option<&Value>,
+    images: ImageResolver,
+    fig_sources: bool,
+    networks: Vec<Option<VectorNetwork>>,
+) -> Result<(Document, Vec<String>), FormatError> {
     let entries: Vec<&Value> = if is_document(v) { vec![v] } else { nodes_entries(v).collect() };
     if entries.is_empty() {
         return Err(FormatError::Corrupt("not a REST API file JSON (no `document`)".into()));
@@ -221,6 +229,7 @@ fn import_impl(v: &Value, variables: Option<&Value>, images: ImageResolver, fig_
         cx.warn("the variables JSON has no `variableCollections` (expected the local variables response) and was ignored");
     }
     cx.style_definitions(v);
+    cx.networks = networks;
     for e in entries {
         let Some(root) = e.get("document") else { continue };
         match text(root, "type") {
@@ -403,6 +412,8 @@ pub(crate) struct Ctx<'a> {
     /// Imported variables by id, and the mode ids of imported collections (default first).
     var_kinds: BTreeMap<String, VariableType>,
     var_modes: BTreeMap<String, Vec<String>>,
+    /// Vector networks built by the `.fig` import, named by layers' `vectorNetworkRef`.
+    networks: Vec<Option<VectorNetwork>>,
 }
 
 impl<'a> Ctx<'a> {
@@ -428,6 +439,7 @@ impl<'a> Ctx<'a> {
             overlay_meta: BTreeMap::new(),
             var_kinds: BTreeMap::new(),
             var_modes: BTreeMap::new(),
+            networks: Vec::new(),
         }
     }
 
@@ -691,14 +703,18 @@ impl<'a> Ctx<'a> {
         }
     }
 
-    /// A vector's network: the editable one when the JSON carries it (`vectorNetwork`, our
-    /// extension, written by the `.fig` import), else from its geometry. A stroke-only vector
-    /// uses the stroke outline, painted with the stroke paints (exact look, editable as a shape):
-    /// returns whether it does, and the caller moves the paints with [`outline_stroke`] once the
-    /// styles and variables of the stroke are read.
+    /// A vector's network: the editable one when the JSON carries it (`vectorNetwork`, or
+    /// `vectorNetworkRef` naming one built by the `.fig` import: our extensions), else from its
+    /// geometry. A stroke-only vector uses the stroke outline, painted with the stroke paints (exact
+    /// look, editable as a shape): returns whether it does, and the caller moves the paints with
+    /// [`outline_stroke`] once the styles and variables of the stroke are read.
     fn vector(&mut self, n: &mut Node, j: &Value) -> bool {
-        if let Some(net) = j.get("vectorNetwork") {
-            match network(net) {
+        let net = match j.get("vectorNetworkRef") {
+            Some(r) => Some(r.as_u64().and_then(|i| self.networks.get(usize::try_from(i).ok()?).cloned().flatten())),
+            None => j.get("vectorNetwork").map(network),
+        };
+        if let Some(net) = net {
+            match net {
                 Some(network) => {
                     n.kind = NodeKind::Vector { network };
                     return false;
@@ -1231,7 +1247,7 @@ fn local(parent: Affine, world: Affine) -> Affine {
 
 /// Finite path data within the coordinate cap.
 /// A vector network in our own JSON shape, when it's within bounds and refers only to what it has.
-fn network(v: &Value) -> Option<VectorNetwork> {
+pub(crate) fn network(v: &Value) -> Option<VectorNetwork> {
     use serde::Deserialize;
     let mut net = VectorNetwork::deserialize(v).ok()?;
     let entries: usize = net.regions.iter().flat_map(|r| &r.loops).map(Vec::len).sum();

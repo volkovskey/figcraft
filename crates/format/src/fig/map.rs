@@ -6,9 +6,10 @@
 //! are expanded here from the main component (overrides and derived layout matched by id path,
 //! component property values applied) so the import looks as saved.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::rc::Rc;
 
+use figcraft_doc::VectorNetwork;
 use figcraft_doc::geom::{Affine, Point};
 use figcraft_doc::proto::{MAX_ACTION_DEPTH, MAX_EXPR_DEPTH};
 use serde_json::{Map, Value, json};
@@ -26,11 +27,18 @@ const MAX_COMMANDS: usize = 200_000;
 /// Id of "no style".
 const NO_STYLE: &str = "4294967295:4294967295";
 
-/// The REST API file JSON for message `msg`, with the warnings about what was skipped.
-pub(super) fn to_rest(msg: &Kv, name: &str) -> Result<(Value, Vec<String>), crate::FormatError> {
+/// [`to_rest`]'s JSON, warnings and vector networks.
+pub(super) type Rest = (Value, Vec<String>, Vec<Option<VectorNetwork>>);
+
+/// The REST API file JSON for message `msg`, with the warnings about what was skipped and the
+/// vector networks its layers name by `vectorNetworkRef` (for [`crate::rest::import_fig`]).
+pub(super) fn to_rest(msg: &Kv, name: &str) -> Result<Rest, crate::FormatError> {
     let mut m = Mapper::new(msg);
     let doc = m.document();
-    let mut out = json!({"name": name, "document": doc});
+    // Large values are moved in, never passed through `json!`, which serialises its arguments:
+    // a deep copy of the whole tree, briefly holding it twice.
+    let mut out = json!({"name": name});
+    out["document"] = doc;
     if !m.library_contexts.is_empty() {
         out[crate::rest::FIG_LIBRARY_CONTEXTS_FIELD] = Value::Array(std::mem::take(&mut m.library_contexts));
     }
@@ -52,7 +60,7 @@ pub(super) fn to_rest(msg: &Kv, name: &str) -> Result<(Value, Vec<String>), crat
     }
     m.properties.finish(&mut out);
     m.warnings.extend(m.properties.warnings);
-    Ok((out, m.warnings))
+    Ok((out, m.warnings, m.networks))
 }
 
 /// REST importer warnings reworded for a `.fig` import (`None`: drop it).
@@ -224,6 +232,12 @@ struct Mapper<'a> {
     override_scope_entries: usize,
     warnings: Vec<String>,
     count: usize,
+    /// Vector networks, each built once: the layers that show one (every instance of a main
+    /// holding it) name it by `vectorNetworkRef`. Kept out of the JSON, where a large file's
+    /// networks took gigabytes.
+    networks: Vec<Option<VectorNetwork>>,
+    /// Index in `networks` by what a network is made from: its blob, its scale and its style table.
+    network_ids: HashMap<(usize, u64, u64, usize), usize>,
 }
 
 impl<'a> Mapper<'a> {
@@ -281,6 +295,8 @@ impl<'a> Mapper<'a> {
             override_scope_entries: 0,
             warnings: Vec::new(),
             count: 0,
+            networks: Vec::new(),
+            network_ids: HashMap::new(),
         }
     }
 
@@ -389,7 +405,9 @@ impl<'a> Mapper<'a> {
         if out.is_empty() {
             self.warn("the file has no pages");
         }
-        json!({"id": doc_id.unwrap_or_else(|| "0:0".into()), "type": "DOCUMENT", "children": out})
+        let mut doc = json!({"id": doc_id.unwrap_or_else(|| "0:0".into()), "type": "DOCUMENT"});
+        doc["children"] = Value::Array(out);
+        doc
     }
 
     /// Keep only component definitions and the containers needed to preserve their source paths.
@@ -885,7 +903,7 @@ impl<'a> Mapper<'a> {
         if own_text(v).is_some() {
             self.warn("connector labels were skipped");
         }
-        if ["vectorNetwork", "fillGeometry", "strokeGeometry"].iter().any(|k| o.contains_key(*k)) {
+        if ["vectorNetwork", "vectorNetworkRef", "fillGeometry", "strokeGeometry"].iter().any(|k| o.contains_key(*k)) {
             return;
         }
         let parent = v.get("parentIndex").and_then(|p| p.get("guid")).and_then(guid);
@@ -1168,7 +1186,8 @@ impl<'a> Mapper<'a> {
     /// False when there's none or it's damaged (the outlines stand in).
     fn network(&mut self, o: &mut Obj, v: &View<'a>) -> bool {
         let Some(vd) = v.get("vectorData") else { return false };
-        let Some(blob) = num(vd, "vectorNetworkBlob").and_then(|i| self.blobs.get(i as usize)).copied() else { return false };
+        let Some(blob_id) = num(vd, "vectorNetworkBlob").map(|i| i as usize) else { return false };
+        let Some(blob) = self.blobs.get(blob_id).copied() else { return false };
         let Some((net, styled_segments)) = network::decode_styled(blob) else {
             self.warn("damaged vector networks import as outlines");
             return false;
@@ -1190,28 +1209,6 @@ impl<'a> Mapper<'a> {
             size.zip(norm).filter(|(s, n)| s.is_finite() && *n > 1e-9).map_or(1.0, |(s, n)| s / n)
         };
         let (sx, sy) = (scale("x"), scale("y"));
-        let vertices: Vec<Value> = net
-            .vertices
-            .iter()
-            .map(|p| {
-                let mut out = json!({"x": p.x * sx, "y": p.y * sy});
-                let st = style(p.style);
-                if let Some(r) = st.and_then(|s| num(s, "cornerRadius")).filter(|r| *r > 0.0) {
-                    out["radius"] = json!(r);
-                }
-                match st.and_then(|s| s.get("handleMirroring")).and_then(Kv::str) {
-                    Some("ANGLE") => out["mirror"] = json!("angle"),
-                    Some("ANGLE_AND_LENGTH") => out["mirror"] = json!("angleAndLength"),
-                    Some("NONE") => out["mirror"] = json!("none"),
-                    _ => {}
-                }
-                out
-            })
-            .collect();
-        let segments: Vec<Value> =
-            net.segments.iter().map(|s| json!({"a": s.a, "b": s.b, "ta": [s.ta.0 * sx, s.ta.1 * sy], "tb": [s.tb.0 * sx, s.tb.1 * sy]})).collect();
-        let regions: Vec<Value> =
-            net.regions.iter().map(|r| json!({"loops": r.loops, "winding": if r.non_zero { "nonZero" } else { "evenOdd" }})).collect();
         if net.regions.iter().any(|r| style(r.style).is_some_and(|s| s.get("fillPaints").is_some())) {
             self.warn("filled areas of a vector with their own fill use the layer's fill");
         }
@@ -1237,7 +1234,46 @@ impl<'a> Mapper<'a> {
             o.insert("strokeCapStart".into(), json!(cap_name(first.unwrap_or(node))));
             o.insert("strokeCapEnd".into(), json!(cap_name(last.unwrap_or(node))));
         }
-        o.insert("vectorNetwork".into(), json!({"vertices": vertices, "segments": segments, "regions": regions}));
+        // Every instance of a main shows the same network: it is written once and shared.
+        let key = (blob_id, sx.to_bits(), sy.to_bits(), std::ptr::from_ref(vd) as usize);
+        let id = match self.network_ids.get(&key) {
+            Some(id) => *id,
+            None => {
+                let vertices: Vec<Value> = net
+                    .vertices
+                    .iter()
+                    .map(|p| {
+                        let mut out = json!({"x": p.x * sx, "y": p.y * sy});
+                        let st = style(p.style);
+                        if let Some(r) = st.and_then(|s| num(s, "cornerRadius")).filter(|r| *r > 0.0) {
+                            out["radius"] = json!(r);
+                        }
+                        match st.and_then(|s| s.get("handleMirroring")).and_then(Kv::str) {
+                            Some("ANGLE") => out["mirror"] = json!("angle"),
+                            Some("ANGLE_AND_LENGTH") => out["mirror"] = json!("angleAndLength"),
+                            Some("NONE") => out["mirror"] = json!("none"),
+                            _ => {}
+                        }
+                        out
+                    })
+                    .collect();
+                let segments: Vec<Value> = net
+                    .segments
+                    .iter()
+                    .map(|s| json!({"a": s.a, "b": s.b, "ta": [s.ta.0 * sx, s.ta.1 * sy], "tb": [s.tb.0 * sx, s.tb.1 * sy]}))
+                    .collect();
+                let regions: Vec<Value> =
+                    net.regions.iter().map(|r| json!({"loops": r.loops, "winding": if r.non_zero { "nonZero" } else { "evenOdd" }})).collect();
+                let mut entry = json!({});
+                entry["vertices"] = Value::Array(vertices);
+                entry["segments"] = Value::Array(segments);
+                entry["regions"] = Value::Array(regions);
+                self.networks.push(crate::rest::network(&entry));
+                self.network_ids.insert(key, self.networks.len() - 1);
+                self.networks.len() - 1
+            }
+        };
+        o.insert("vectorNetworkRef".into(), json!(id));
         true
     }
 
@@ -3252,7 +3288,7 @@ mod property_capture {
                 o(vec![("boolValue", Kv::Bool(false)), ("textValue", Kv::Str("other".into()))]),
             ] {
                 // A malformed present default is neither retained nor guessed as absent.
-                let (v, warnings) = super::super::to_rest(&message(Some(bad), false, false), "Synthetic").unwrap();
+                let (v, warnings, _) = super::super::to_rest(&message(Some(bad), false, false), "Synthetic").unwrap();
                 assert!(v.get(r::FIG_CATALOGS_FIELD).is_none(), "a malformed default must not be retained");
                 assert!(left_out(&warnings, DROPPED_DEFINITION), "{warnings:?}");
             }
@@ -3288,7 +3324,7 @@ mod property_capture {
             let Kv::Object(fields) = current else { panic!() };
             let (_, Kv::Array(defs)) = fields.iter_mut().find(|(key, _)| *key == "componentPropDefs").unwrap() else { panic!() };
             defs.push(defs[0].clone());
-            let (v, warnings) = super::super::to_rest(&msg, "Synthetic").unwrap();
+            let (v, warnings, _) = super::super::to_rest(&msg, "Synthetic").unwrap();
             assert!(v.get(r::FIG_CATALOGS_FIELD).is_none(), "an ambiguous declaration must not be retained");
             assert!(named_id(&v["document"], "9:11").unwrap().get(r::FIG_PACKET_FIELD).is_none());
             assert!(left_out(&warnings, DROPPED_DEFINITION), "{warnings:?}");
@@ -3336,7 +3372,7 @@ mod property_capture {
                 assert_eq!(bindings.values[0].definition, gid(70));
                 assert_eq!(bindings.visible.unwrap().definition, gid(70));
             }
-            let (doc, _) = crate::rest::import_fig(&value, &|_| None).unwrap();
+            let (doc, _) = crate::rest::import_fig(&value, &|_| None, Vec::new()).unwrap();
             let dual: Vec<_> = doc
                 .nodes()
                 .filter_map(|n| n.plugin_data.get(r::BINDINGS_KEY))
@@ -3365,7 +3401,7 @@ mod property_capture {
         #[test]
         fn missing_alias_for_an_active_standard_resource_field_drops_that_field() {
             let value = mapped(&message(None, false, false));
-            let (doc, _) = crate::rest::import_fig(&value, &|_| None).unwrap();
+            let (doc, _) = crate::rest::import_fig(&value, &|_| None, Vec::new()).unwrap();
             let (bytes, _) = crate::fig::export(&doc, None).unwrap();
             let archive = crate::fig::Archive::open(&bytes).unwrap();
             let (schema, bytes) = crate::fig::decode_canvas(&archive.canvas).unwrap();
@@ -3392,7 +3428,7 @@ mod property_capture {
                 }
             }
             assert!(changed > 0, "a real written packet must have been mutated");
-            let (v, warnings) = super::super::to_rest(&decoded, "Synthetic missing alias").unwrap();
+            let (v, warnings, _) = super::super::to_rest(&decoded, "Synthetic missing alias").unwrap();
             assert!(left_out(&warnings, DROPPED_UNBOUND), "{warnings:?}");
             // The value named a hidden resource definition by its wire id only: without the alias it
             // is left out rather than imported under a meaningless name.
@@ -3407,7 +3443,7 @@ mod property_capture {
             let mut count = 0;
             bool_props(&v["document"], &mut count);
             assert_eq!(count, 0);
-            let (doc, _) = crate::rest::import_fig(&v, &|_| None).unwrap();
+            let (doc, _) = crate::rest::import_fig(&v, &|_| None, Vec::new()).unwrap();
             assert!(doc.nodes().all(|n| !matches!(&n.kind, figcraft_doc::NodeKind::Instance { props, .. } if !props.is_empty())));
         }
     }

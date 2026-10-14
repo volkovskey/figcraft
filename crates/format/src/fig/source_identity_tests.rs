@@ -911,7 +911,7 @@ fn edit_node(value: &mut Value, id: &str, edit: &mut dyn FnMut(&mut Value)) {
 
 #[test]
 fn plain_rest_ignores_even_valid_private_provenance() {
-    let (json, _) = super::map::to_rest(&message(false), "Identity").unwrap();
+    let (json, _, _) = super::map::to_rest(&message(false), "Identity").unwrap();
     let (doc, _) = crate::rest::import(&json, &|_| None).unwrap();
     assert!(doc.nodes().all(|n| n.source.is_none()));
 }
@@ -919,7 +919,7 @@ fn plain_rest_ignores_even_valid_private_provenance() {
 #[test]
 fn missing_foreign_self_and_wrong_namespace_provenance_is_not_guessed() {
     for (origin, id) in [("1:99999", "I1:70;1:40"), ("1:12", "I1:70;1:40"), ("1:70", "1:70"), ("1:40", "I1:70;1:40")] {
-        let (mut json, _) = super::map::to_rest(&message(false), "Identity").unwrap();
+        let (mut json, _, _) = super::map::to_rest(&message(false), "Identity").unwrap();
         edit_node(&mut json["document"]["children"][0], id, &mut |node| {
             node[crate::rest::FIG_SOURCE_FIELD]["origin"] = json!(origin);
             if id == "1:70" {
@@ -930,7 +930,7 @@ fn missing_foreign_self_and_wrong_namespace_provenance_is_not_guessed() {
                 node["id"] = json!(format!("I1:70;{origin}")); // valid namespace, but missing/foreign target
             }
         });
-        let (doc, _) = crate::rest::import_fig(&json, &|_| None).unwrap();
+        let (doc, _) = crate::rest::import_fig(&json, &|_| None, Vec::new()).unwrap();
         let target = if id == "1:70" { named(&doc, "Copy") } else { named(&doc, "Renamed wrapper") };
         assert!(doc.node(target).unwrap().source.is_none(), "{origin}/{id}");
     }
@@ -938,24 +938,24 @@ fn missing_foreign_self_and_wrong_namespace_provenance_is_not_guessed() {
 
 #[test]
 fn forward_main_references_and_duplicate_ids_are_conservative() {
-    let (mut json, _) = super::map::to_rest(&message(false), "Identity").unwrap();
+    let (mut json, _, _) = super::map::to_rest(&message(false), "Identity").unwrap();
     json["document"]["children"][0]["children"].as_array_mut().unwrap().rotate_right(1);
-    let (doc, _) = crate::rest::import_fig(&json, &|_| None).unwrap();
+    let (doc, _) = crate::rest::import_fig(&json, &|_| None, Vec::new()).unwrap();
     assert!(doc.node(named(&doc, "Copy")).unwrap().source.is_some());
     // 1:40 is nested inside Outer, so duplicate that actual template at page level.
     let template = json["document"]["children"][0]["children"].as_array().unwrap().iter().find(|n| n["id"] == "1:30").unwrap()["children"][0].clone();
     json["document"]["children"][0]["children"].as_array_mut().unwrap().push(template);
-    let (doc, _) = crate::rest::import_fig(&json, &|_| None).unwrap();
+    let (doc, _) = crate::rest::import_fig(&json, &|_| None, Vec::new()).unwrap();
     assert!(doc.node(named(&doc, "Renamed wrapper")).unwrap().source.is_none());
 }
 
 #[test]
 fn missing_contextual_targets_do_not_fall_back_to_a_global_slot() {
-    let (mut json, _) = super::map::to_rest(&message(false), "Identity").unwrap();
+    let (mut json, _, _) = super::map::to_rest(&message(false), "Identity").unwrap();
     edit_node(&mut json["document"]["children"][0], "1:40", &mut |node| {
         node["children"].as_array_mut().unwrap().retain(|n| n["id"] != "I1:40;1:60");
     });
-    let (doc, _) = crate::rest::import_fig(&json, &|_| None).unwrap();
+    let (doc, _) = crate::rest::import_fig(&json, &|_| None, Vec::new()).unwrap();
     let copy_slot = child(&doc, child(&doc, named(&doc, "Copy"), 0), 0);
     assert!(doc.node(copy_slot).unwrap().source.is_none());
     assert!(doc.nodes().any(|n| n.name == "Same nested slot"), "the raw slot still exists");
@@ -1144,7 +1144,7 @@ fn absent_external_mains_keep_known_owned_instances_and_contextual_copies() {
 #[test]
 fn external_namespace_is_private_and_requires_actual_wire_instances() {
     for mode in 0..3 {
-        let (mut json, _) = super::map::to_rest(&external_namespace_message(), "External").unwrap();
+        let (mut json, _, _) = super::map::to_rest(&external_namespace_message(), "External").unwrap();
         if mode == 0 {
             let (doc, _) = crate::rest::import(&json, &|_| None).unwrap();
             assert!(doc.nodes().all(|n| n.source.is_none()));
@@ -1158,7 +1158,7 @@ fn external_namespace_is_private_and_requires_actual_wire_instances() {
                 node[crate::rest::FIG_SOURCE_FIELD]["wireFrame"] = json!(true);
             }
         });
-        let (doc, _) = crate::rest::import_fig(&json, &|_| None).unwrap();
+        let (doc, _) = crate::rest::import_fig(&json, &|_| None, Vec::new()).unwrap();
         let raw_slot = child(&doc, child(&doc, child(&doc, named(&doc, "Outer external"), 0), 0), 0);
         assert!(doc.node(raw_slot).unwrap().source.is_none(), "ordinary/fake frame mode {mode} must not establish a namespace");
     }
@@ -1167,7 +1167,7 @@ fn external_namespace_is_private_and_requires_actual_wire_instances() {
 #[test]
 fn external_namespace_does_not_cover_present_wrong_kind_or_blocked_main() {
     for mode in 0..3 {
-        let (mut json, _) = super::map::to_rest(&external_namespace_message(), "External").unwrap();
+        let (mut json, _, _) = super::map::to_rest(&external_namespace_message(), "External").unwrap();
         let page = &mut json["document"]["children"][0];
         match mode {
             0 => page["children"].as_array_mut().unwrap().push(json!({"id":"1:99", "type":"FRAME", "name":"Wrong kind",
@@ -1180,7 +1180,7 @@ fn external_namespace_does_not_cover_present_wrong_kind_or_blocked_main() {
                 "children":[{"id":"1:199", "type":"INSTANCE", "name":"Cycle edge", "componentId":"1:30",
                     "_figSource":{"origin":"1:199","expanded":false,"wireFrame":false,"wireInstance":true}}]})),
         }
-        let (doc, _) = crate::rest::import_fig(&json, &|_| None).unwrap();
+        let (doc, _) = crate::rest::import_fig(&json, &|_| None, Vec::new()).unwrap();
         let body = child(&doc, named(&doc, "Outer external"), 0);
         assert!(matches!(doc.node(body).unwrap().kind, NodeKind::Frame));
         let slot = child(&doc, child(&doc, body, 0), 0);
@@ -1191,7 +1191,7 @@ fn external_namespace_does_not_cover_present_wrong_kind_or_blocked_main() {
 #[test]
 fn external_namespace_rejects_foreign_siblings_duplicates_and_bad_paths() {
     for mode in 0..4 {
-        let (mut json, _) = super::map::to_rest(&external_namespace_message(), "External").unwrap();
+        let (mut json, _, _) = super::map::to_rest(&external_namespace_message(), "External").unwrap();
         let page = &mut json["document"]["children"][0];
         match mode {
             0 => {
@@ -1215,7 +1215,7 @@ fn external_namespace_rejects_foreign_siblings_duplicates_and_bad_paths() {
                 node["id"] = json!("I1:999;1:100");
             }),
         }
-        let (doc, warnings) = crate::rest::import_fig(&json, &|_| None).unwrap();
+        let (doc, warnings) = crate::rest::import_fig(&json, &|_| None, Vec::new()).unwrap();
         let slot = named(&doc, "Renamed owned slot");
         assert!(doc.node(slot).unwrap().source.is_none(), "invalid frame namespace mode {mode}");
         assert!(warnings.iter().any(|w| w.contains("source link")), "invalid expanded paths remain reported: {warnings:?}");

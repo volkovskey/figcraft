@@ -234,7 +234,7 @@ fn stage_b_multiple_override_rows_keep_local_and_outer_priority() {
             ),
         ]),
     )]);
-    let (rest, warnings) = super::super::map::to_rest(&msg, "Override order").unwrap();
+    let (rest, warnings, _) = super::super::map::to_rest(&msg, "Override order").unwrap();
     assert!(warnings.is_empty(), "{warnings:?}");
     let page = &rest["document"]["children"][0];
     let find = |name: &str| page["children"].as_array().unwrap().iter().find(|n| n["name"] == name).unwrap();

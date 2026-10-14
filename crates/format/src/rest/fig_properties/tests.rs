@@ -51,7 +51,7 @@ fn fixture() -> (Value, Catalog, Bindings) {
     (input, catalog, bindings)
 }
 fn imported(v: &Value) -> Document {
-    crate::rest::import_fig(v, &|_| None).unwrap().0
+    crate::rest::import_fig(v, &|_| None, Vec::new()).unwrap().0
 }
 fn used(doc: &Document) -> &figcraft_doc::Node {
     doc.nodes().find(|n| n.name == "Use").unwrap()
@@ -127,14 +127,14 @@ fn foreign_main_and_native_key_collisions_leave_out_only_the_packet() {
     let (mut v, _, _) = fixture();
     v["document"]["children"][0]["children"][1]["componentId"] = json!("10:9");
     v["document"]["children"][0]["children"].as_array_mut().unwrap().push(json!({"id":"10:9","type":"COMPONENT","name":"Foreign"}));
-    let (doc, warnings) = crate::rest::import_fig(&v, &|_| None).unwrap();
+    let (doc, warnings) = crate::rest::import_fig(&v, &|_| None, Vec::new()).unwrap();
     assert!(stale(&warnings), "{warnings:?}");
     assert!(!used(&doc).plugin_data.contains_key(r::BINDINGS_KEY));
     assert!(props(&doc).is_empty(), "no value may be restored under the foreign main: {:?}", props(&doc));
     // A native key already taken: the other value is not overwritten by the alias.
     let (mut v, _, _) = fixture();
     v["document"]["children"][0]["children"][1]["componentProperties"]["Toggle#30:1"] = json!({"type":"BOOLEAN","value":true});
-    let (doc, warnings) = crate::rest::import_fig(&v, &|_| None).unwrap();
+    let (doc, warnings) = crate::rest::import_fig(&v, &|_| None, Vec::new()).unwrap();
     assert!(stale(&warnings), "{warnings:?}");
     assert!(!used(&doc).plugin_data.contains_key(r::BINDINGS_KEY));
     assert_eq!(props(&doc).get("Toggle#30:1"), Some(&json!(true)));
@@ -142,7 +142,7 @@ fn foreign_main_and_native_key_collisions_leave_out_only_the_packet() {
     // A live main definition with the native key: the alias must not rebind it.
     let (mut v, _, _) = fixture();
     v["document"]["children"][0]["children"][0]["componentPropertyDefinitions"] = json!({"Toggle#30:1":{"type":"BOOLEAN","defaultValue":false}});
-    let (doc, warnings) = crate::rest::import_fig(&v, &|_| None).unwrap();
+    let (doc, warnings) = crate::rest::import_fig(&v, &|_| None, Vec::new()).unwrap();
     assert!(stale(&warnings), "an active retained alias must not rebind a live main definition: {warnings:?}");
     assert!(!used(&doc).plugin_data.contains_key(r::BINDINGS_KEY));
     assert!(!props(&doc).contains_key("Toggle#30:1"), "the alias value was moved onto the live definition");
@@ -174,7 +174,7 @@ fn inactive_old_bindings_survive_known_main_swap_without_an_alias_claim() {
 fn active_resource_alias_cannot_take_a_live_main_wire_definition() {
     let (mut v, _, _) = fixture();
     v["document"]["children"][0]["children"][0]["componentPropertyDefinitions"] = json!({"Toggle#13:1":{"type":"BOOLEAN","defaultValue":true}});
-    let (doc, warnings) = crate::rest::import_fig(&v, &|_| None).unwrap();
+    let (doc, warnings) = crate::rest::import_fig(&v, &|_| None, Vec::new()).unwrap();
     assert!(stale(&warnings), "{warnings:?}");
     assert!(!used(&doc).plugin_data.contains_key(r::BINDINGS_KEY));
     // The actual standard definition remains linked to its assignment.
@@ -231,7 +231,7 @@ fn oversized_native_bindings_roll_back_aliases_and_keep_live_properties() {
     node[r::FIG_PACKET_FIELD] = json!(text);
     v[r::FIG_CATALOGS_FIELD] = json!([r::write_catalog(&catalog).unwrap()]);
     let original = v.clone();
-    let (doc, warnings) = crate::rest::import_fig(&v, &|_| None).unwrap();
+    let (doc, warnings) = crate::rest::import_fig(&v, &|_| None, Vec::new()).unwrap();
     assert_eq!(v, original, "the input packet must remain unchanged");
     assert_eq!(warnings.iter().filter(|w| w.ends_with(r::DROPPED_LIMIT)).collect::<Vec<_>>(), [&format!("1 {}", r::DROPPED_LIMIT)]);
     assert!(!used(&doc).plugin_data.contains_key(r::BINDINGS_KEY));

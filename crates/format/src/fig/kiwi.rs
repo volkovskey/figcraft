@@ -10,8 +10,11 @@ use std::fmt;
 
 /// Deepest struct/message nesting decoded.
 const MAX_DEPTH: usize = 64;
-/// Most values decoded from one message (every scalar, array element and field counts).
+/// Most values decoded from one message (every scalar, array element and field counts) at the
+/// least: a message decodes [`value_budget`] values, one per [`BYTES_PER_VALUE`] bytes of it, so a
+/// large real file decodes while a small one still can't expand into a huge tree.
 pub(super) const MAX_VALUES: usize = 20_000_000;
+const BYTES_PER_VALUE: usize = 4;
 /// Most definitions in a schema, and fields in one definition.
 const MAX_DEFS: usize = 10_000;
 const MAX_FIELDS: usize = 10_000;
@@ -320,7 +323,7 @@ impl Schema {
     }
 
     fn decode_message_with_budget<'s>(&'s self, root: usize, data: &[u8], byte_budget: usize) -> Result<Kv<'s>, KiwiError> {
-        let mut d = Decoder { schema: self, r: Reader { data, pos: 0 }, budget: MAX_VALUES, byte_budget };
+        let mut d = Decoder { schema: self, r: Reader { data, pos: 0 }, budget: value_budget(data.len()), byte_budget };
         d.def(root, 0)
     }
 }
@@ -331,6 +334,11 @@ fn import_decode_budget(encoded_bytes: usize) -> usize {
 
 fn decode_budget(encoded_bytes: usize, minimum: usize, maximum: usize) -> usize {
     minimum.max(encoded_bytes.saturating_mul(16)).min(maximum)
+}
+
+/// Most values decoded from a message of `len` bytes.
+pub(crate) fn value_budget(len: usize) -> usize {
+    MAX_VALUES.max(len / BYTES_PER_VALUE)
 }
 
 struct Decoder<'s, 'b> {
@@ -450,6 +458,8 @@ impl<'s> Decoder<'s, '_> {
                 loop {
                     let id = self.r.var_uint()?;
                     if id == 0 {
+                        // Grown by doubling: trimmed, a large file's tree takes a good part less.
+                        out.shrink_to_fit();
                         return Ok(Kv::Object(out));
                     }
                     let f = d.fields.iter().find(|f| f.value == id).ok_or_else(|| KiwiError(format!("message: {} has no field {id}", d.name)))?;

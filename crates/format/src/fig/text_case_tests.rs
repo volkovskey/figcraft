@@ -74,7 +74,7 @@ fn assert_native(doc: &Document, local: TextCase, shared: TextCase) {
 }
 
 fn native(value: &Value, local: TextCase, shared: TextCase) -> Document {
-    let (doc, warnings) = crate::rest::import_fig(value, &|_| None).unwrap();
+    let (doc, warnings) = crate::rest::import_fig(value, &|_| None, Vec::new()).unwrap();
     assert!(warnings.is_empty(), "{warnings:?}");
     assert_native(&doc, local, shared);
     doc

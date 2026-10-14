@@ -123,7 +123,7 @@ fn explicit_zero_paragraph_values_clear_shared_values() {
     let local = value["document"]["children"][0]["children"].as_array().unwrap().iter().find(|node| node["name"] == "Label").unwrap();
     assert_eq!(local["style"]["paragraphSpacing"].as_f64(), Some(0.0));
     assert_eq!(local["style"]["paragraphIndent"].as_f64(), Some(0.0));
-    let (doc, warnings) = crate::rest::import_fig(&value, &|_| None).unwrap();
+    let (doc, warnings) = crate::rest::import_fig(&value, &|_| None, Vec::new()).unwrap();
     assert!(warnings.is_empty(), "{warnings:?}");
     assert_native(&doc, 0.0, 0.0);
     two_rounds(doc, 0.0, 0.0);
@@ -135,7 +135,7 @@ fn absent_local_paragraph_fields_keep_shared_fallback() {
     let local = value["document"]["children"][0]["children"].as_array().unwrap().iter().find(|node| node["name"] == "Label").unwrap();
     assert_eq!(local["style"]["paragraphSpacing"].as_f64(), Some(24.0));
     assert_eq!(local["style"]["paragraphIndent"].as_f64(), Some(12.0));
-    let (doc, warnings) = crate::rest::import_fig(&value, &|_| None).unwrap();
+    let (doc, warnings) = crate::rest::import_fig(&value, &|_| None, Vec::new()).unwrap();
     assert!(warnings.is_empty(), "{warnings:?}");
     assert_native(&doc, 24.0, 12.0);
     two_rounds(doc, 24.0, 12.0);

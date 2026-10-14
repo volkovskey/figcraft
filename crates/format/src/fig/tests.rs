@@ -722,8 +722,8 @@ fn mangled_kiwi_never_panics() {
             m[i] = r.next() as u8;
         }
         if let Ok(kv) = sc.decode_message(root, &m) {
-            let (json, _) = map::to_rest(&kv, "x").unwrap();
-            let _ = crate::rest::import(&json, &crate::rest::no_images);
+            let (json, _, networks) = map::to_rest(&kv, "x").unwrap();
+            let _ = crate::rest::import_fig(&json, &crate::rest::no_images, networks);
         }
         let mut sbytes = schema_bytes.clone();
         let i = (r.next() as usize) % sbytes.len();
@@ -743,6 +743,18 @@ fn mangled_kiwi_never_panics() {
         framed.extend_from_slice(&junk);
         let _ = import(&framed, "x");
     }
+}
+
+#[test]
+fn large_messages_get_a_larger_value_budget() {
+    // Small messages keep the fixed floor: a few bytes can't expand into a huge tree.
+    assert_eq!(kiwi::value_budget(0), 20_000_000);
+    assert_eq!(kiwi::value_budget(1 << 20), 20_000_000);
+    // A real 400 000-layer file: a 334 MB message holding 30.5 million values (about 11 bytes
+    // each) was refused as "too many values".
+    assert!(kiwi::value_budget(333_714_035) > 30_514_899);
+    // Still bounded by the largest chunk read.
+    assert!(kiwi::value_budget(MAX_CHUNK as usize) <= 128 << 20);
 }
 
 #[test]
@@ -837,7 +849,7 @@ fn dump_samples() {
         std::fs::write(format!("{out}/{stem}.schema.txt"), txt).unwrap();
         let msg = schema.decode_message(schema.find("Message").unwrap(), &message).unwrap();
         std::fs::write(format!("{out}/{stem}.json"), serde_json::to_string_pretty(&debug_json(&msg)).unwrap()).unwrap();
-        let (rest, _) = map::to_rest(&msg, &stem).unwrap();
+        let (rest, ..) = map::to_rest(&msg, &stem).unwrap();
         std::fs::write(format!("{out}/{stem}.rest.json"), serde_json::to_string_pretty(&rest).unwrap()).unwrap();
     }
 }

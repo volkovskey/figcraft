@@ -445,11 +445,15 @@ pub(crate) fn recovered(path: &str) -> Result<DocState> {
 #[cfg(not(target_arch = "wasm32"))]
 const MAX_NATIVE_FILE: u64 = 4 * 1024 * 1024 * 1024;
 
-/// The bytes of file `path`: native documents up to [`MAX_NATIVE_FILE`], anything imported up to
-/// [`MAX_IMPORT_FILE`].
+/// The bytes of file `path`: native documents up to [`MAX_NATIVE_FILE`], `.fig` files up to
+/// [`MAX_FIG_FILE`], anything else imported up to [`MAX_IMPORT_FILE`].
 #[cfg(not(target_arch = "wasm32"))]
 fn read(path: &str) -> Result<Vec<u8>> {
-    if ext(path) == "figcraft" { read_native(path) } else { read_capped(path, MAX_IMPORT_FILE as u64) }
+    match ext(path).as_str() {
+        "figcraft" => read_native(path),
+        "fig" => read_capped(path, MAX_FIG_FILE as u64),
+        _ => read_capped(path, MAX_IMPORT_FILE as u64),
+    }
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -522,6 +526,9 @@ fn file_stem(path: &str) -> String {
 
 /// Compressed files and encoded import payloads must fit in memory before parsing starts.
 const MAX_IMPORT_FILE: usize = 256 * 1024 * 1024;
+/// A `.fig` file carries its images: real design files run to several hundred MB. Its decoder
+/// budgets its own work by the message size.
+const MAX_FIG_FILE: usize = 2 * 1024 * 1024 * 1024;
 const MAX_IMPORT_IMAGE: usize = 32 * 1024 * 1024;
 const MAX_IMPORT_IMAGE_BYTES: usize = 256 * 1024 * 1024;
 const MAX_IMPORT_IMAGES: usize = 4096;
@@ -657,7 +664,8 @@ pub fn load(path: &str) -> Result<(Document, Vec<String>)> {
 }
 
 pub fn load_bytes(bytes: &[u8], name_hint: &str) -> Result<(Document, Vec<String>)> {
-    check_import_size("file.open", bytes.len(), MAX_IMPORT_FILE, "file")?;
+    let max = if figcraft_format::fig::is_fig(bytes) { MAX_FIG_FILE } else { MAX_IMPORT_FILE };
+    check_import_size("file.open", bytes.len(), max, "file")?;
     load_with(bytes, name_hint, None, &figcraft_format::rest::no_images).map(|(l, _)| (l.doc, l.issues))
 }
 

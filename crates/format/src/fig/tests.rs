@@ -758,6 +758,24 @@ fn large_messages_get_a_larger_value_budget() {
 }
 
 #[test]
+fn a_real_files_images_fit_the_image_budget() {
+    // A real 705 MB file holds 858 images in 562 MB: with a 256 MB budget, 150 fills showed
+    // placeholders.
+    let mut z = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    let stored = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+    for (name, bytes) in [("canvas.fig", b"fig-kiwi".to_vec()), ("images/ab", png())] {
+        z.start_file(name, stored).unwrap();
+        z.write_all(&bytes).unwrap();
+    }
+    let bytes = z.finish().unwrap().into_inner();
+    let archive = Archive::open(&bytes).unwrap();
+    archive.image_count.set(857);
+    archive.image_bytes.set(562 << 20);
+    assert!(archive.image("ab").is_some());
+    assert!(!archive.image_limits_hit.get());
+}
+
+#[test]
 fn hostile_input_is_refused() {
     // A message that contains itself, nested past the depth cap.
     let field = |ty, array| vec![Field { name: "m".into(), ty: Some(ty), array, value: 1 }];

@@ -170,6 +170,19 @@ fn repro_n1_native_files_above_the_import_cap_are_read() {
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
+/// A `.fig` file carries its images, so real ones run past the import cap: it has its own. The
+/// sparse file fails to parse, but not because of its size.
+#[test]
+fn fig_files_above_the_import_cap_are_read() {
+    let dir = std::env::temp_dir().join(format!("figcraft-fig-cap-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("big.fig");
+    std::fs::File::create(&path).unwrap().set_len(257 * 1024 * 1024).unwrap();
+    let err = Session::new().execute("file.open", &json!({"path": path.to_string_lossy()})).err();
+    assert!(!err.is_some_and(|e| e.to_string().contains("not a file of at most")), ".fig file refused by size");
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
 /// G3 follow-up: renaming a colliding collection also renames the identical-looking variable
 /// that belongs to it, and the appended file keeps its image bytes.
 #[test]

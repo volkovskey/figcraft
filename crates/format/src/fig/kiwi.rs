@@ -24,7 +24,8 @@ const MAX_SCHEMA_NAME: usize = 1024;
 const MAX_SCHEMA_NAME_BYTES: usize = 16 * 1024 * 1024;
 /// Retained decoded strings, blobs and value cells; a value count alone does not cap allocations.
 pub(super) const MAX_DECODE_BYTES: usize = 256 * 1024 * 1024;
-const MAX_IMPORT_DECODE_BYTES: usize = 1024 * 1024 * 1024;
+/// 16 bytes for each of the largest chunk's (512 MiB): a real 334 MB message retains 3.1 GB.
+const MAX_IMPORT_DECODE_BYTES: usize = if (usize::MAX as u64) < (8 << 30) { usize::MAX } else { (8u64 << 30) as usize };
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct KiwiError(pub String);
@@ -828,8 +829,17 @@ mod budget_tests {
         assert_eq!(import_decode_budget(16 * MIB), 256 * MIB);
         assert_eq!(import_decode_budget(17 * MIB), 272 * MIB);
         assert_eq!(import_decode_budget(50 * MIB), 800 * MIB);
-        assert_eq!(import_decode_budget(64 * MIB), MAX_IMPORT_DECODE_BYTES);
+        assert_eq!(import_decode_budget(64 * MIB), 1024 * MIB);
         assert_eq!(import_decode_budget(usize::MAX), MAX_IMPORT_DECODE_BYTES);
+    }
+
+    #[test]
+    #[cfg(target_pointer_width = "64")]
+    fn large_real_messages_fit_the_import_decode_budget() {
+        // A real 400 000-layer file: its 334 MB message retains 3.07 GB once decoded.
+        assert!(import_decode_budget(333_714_035) >= 3_065_767_210);
+        // Still bounded: 16 bytes for each byte of the largest chunk read.
+        assert_eq!(import_decode_budget(1 << 40), 8 << 30);
     }
 
     #[test]

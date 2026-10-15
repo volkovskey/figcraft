@@ -56,8 +56,9 @@ const MAX_CANVAS: u64 = 256 * 1024 * 1024;
 const MAX_CHUNK: u64 = 512 * 1024 * 1024;
 /// Largest image member read.
 const MAX_IMAGE: u64 = 256 * 1024 * 1024;
-/// Image members share a total budget; many individually valid members must not fill memory.
-const MAX_IMAGE_BYTES: u64 = 256 * 1024 * 1024;
+/// Image members share a total budget; many individually valid members must not fill memory. A
+/// real 705 MB file holds 562 MB of images, and a `.fig` file is read up to 2 GiB.
+const MAX_IMAGE_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 const MAX_IMAGES: usize = 4096;
 /// Chunks read from `canvas.fig`: the schema and the message.
 const USED_CHUNKS: usize = 2;
